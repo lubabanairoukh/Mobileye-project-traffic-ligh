@@ -1,0 +1,17 @@
+Day Two:
+
+Milestones:
+Implement another function that crops the area around these identified points.
+
+End Goal:
+Generate cropped images that contain potential traffic lights.
+
+Focus On:
+Keeping the code clean and simple.
+Making every step of the image processing clear and readable by dividing tasks into functions, adding proper documentation, and ensuring clarity in the code.
+Testing and validation: try to test your functions with different inputs to make sure they're working as expected. Consider using assert statements or even writing formal unit tests.
+Modularity and reusability: strive to make your functions modular and reusable. Each function should ideally have a single responsibility and be reusable in different contexts.
+Code commenting: good comments don't explain what the code is doing, but why it's doing it. Explain your logic and reasoning where necessary.
+
+### IMPORTANT:
+Notice that all crops should be of the same size

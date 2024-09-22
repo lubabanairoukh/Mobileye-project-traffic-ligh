@@ -1,0 +1,9 @@
+Day Three:
+
+Milestones:
+
+Prepare a presentation explaining your work.
+
+Automate the testing of your results using polygons (leveraging the JSON file that comes with the image).
+
+Improve your algorithm, make the code more readable and efficient.

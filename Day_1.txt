@@ -1,0 +1,39 @@
+Day One:
+
+how to start
+Set up a Pythonic environment. Install the necessary packages from the provided requirements.txt file using pip:
+
+pip install -r requirements.txt
+Familiarize yourself with these important Python packages:
+
+OpenCV (cv2): A library primarily aimed at real-time computer vision.
+Pillow: Adds image processing capabilities to your Python interpreter.
+Numpy: A package for scientific computing with Python.
+
+Milestones:
+
+--- important ---
+*** After every step, you should check your code with a couple of images to see that it works just the way you wanted it to work. (DONT REPEAT THE SAME IMAGES!!!)***
+*** Debug your code, breakpoint, breakpoint, breakpoint. Step by step, learn what each stage you wrote does. ***
+
+Identify a function named find_tfl_lights in the code. This function should output four lists containing the x, y coordinates of all red and green traffic light dots in the image, from there start the following milestones.
+
+Load a relevant image (one with traffic lights -> TFLs, and preferebly with polygons) using Python. (Use relevant libraries to read the image file).
+
+Read about image dimensions, you can start with this: 
+ - https://www.easytechjunkie.com/what-is-color-image-processing.htm
+ - https://homepages.inf.ed.ac.uk/rbf/CVonline/LOCAL_COPIES/OWENS/LECT14/lecture12.html (extra reading - optional)
+
+Run the original code, understand the kernels, and the existing image transformations (debug it).
+
+Try apply a classic blurring kernel on the image just to grasp the effects of kernels on images, apply an existing blurring function from one of the packages.
+
+Reaserch, implement and apply a custom kernels (3 on 3 is not always the answer :) and mathematical filters in order to make the image more suitable for farther detection.
+
+verify that the coordinates that you have (with the ground truth) are tfl or not.
+
+Crop parts of the image in the function create_crops. (All the crops should be the same size)
+
+Crop a specific coordinate from the image.
+
+Start implementing it into the code in a clear and simple way (use Day Two for the what and where).
