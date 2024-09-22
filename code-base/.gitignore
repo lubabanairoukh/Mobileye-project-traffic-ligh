@@ -1,0 +1,103 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+env/
+venv/
+ENV/
+.env/
+.venv/
+env.bak/
+
+# VSCode settings (if you're using VSCode)
+.vscode/
+
+# Visual Studio Code
+.vscode/
+.history/
+
+# pyenv
+.python-version
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyCharm project settings
+.idea/
+
+# VSCode workspace settings
+.code-workspace
+
+# Mac system files
+.DS_Store
+
+# Logs
+*.log
+
+# Ignore data files and large datasets (if any)
+data/
+*.csv
+*.json
+
+# Images (if dynamically created or generated)
+*.jpg
+*.jpeg
+*.png
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Coverage reports
+htmlcov/
+.coverage
+*.cover
+*.py,cover
+.cache
+
+# Test results
+coverage.xml
+*.cover
+.nox/
+*.test-result
+
+# Docker-specific files (if you're using Docker)
+Dockerfile
+.dockerignore
+
+# Other tools and dependencies (if needed)
+*.env

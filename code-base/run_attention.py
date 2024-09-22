@@ -37,6 +37,8 @@ def find_tfl_lights(c_image: np.ndarray, **kwargs) -> Dict[str, Any]:
     # Note there are no explicit strings in the code-base. ALWAYS USE A CONSTANT VARIABLE INSTEAD!.
     """
 
+    print("In find", c_image.dtype)
+
     # Okay... Here's an example of what this function should return. You will write your own of course
     x_red: List[float] = (np.arange(-100, 100, 20) + c_image.shape[1] / 2).tolist()
     y_red: List[float] = [c_image.shape[0] / 2 - 120] * len(x_red)
@@ -61,6 +63,8 @@ def test_find_tfl_lights(row: Series, args: Namespace) -> DataFrame:
     image_path: str = row[IMAG_PATH]
     json_path: str = row[JSON_PATH]
     image: np.ndarray = np.array(Image.open(image_path), dtype=np.float32) / 255
+
+    print("In test", image.dtype)
 
     if args.debug and json_path is not None:
         # This code-base demonstrates the fact you can read the bounding polygons from the json files
@@ -89,7 +93,10 @@ def test_find_tfl_lights(row: Series, args: Namespace) -> DataFrame:
     print(f"Image: {image_path}, {is_red.sum()} reds, {is_green.sum()} greens")
 
     if args.debug:
-        # Show the image with the detections
+        # And here are some tips & tricks regarding matplotlib
+        # They will look like pictures if you use jupyter, and like magic if you use pycharm!
+        # You can zoom one image, and the other will zoom accordingly.
+        # I think you will find it very very useful!
         plt.figure(f"{row[SEQ_IMAG]}: {row[NAME]} detections")
         plt.clf()
         plt.subplot(211, sharex=ax, sharey=ax)
@@ -97,10 +104,13 @@ def test_find_tfl_lights(row: Series, args: Namespace) -> DataFrame:
         plt.title('Original image.. Always try to compare your output to it')
         plt.plot(tfl_x[is_red], tfl_y[is_red], 'rx', markersize=4)
         plt.plot(tfl_x[~is_red], tfl_y[~is_red], 'g+', markersize=4)
-
-        # Show clear image
+        # Now let's convolve. Cannot convolve a 3D image with a 2D kernel, so I create a 2D image
+        # Note: This image is useless for you, so you solve it yourself
+        useless_image: np.ndarray = np.std(image, axis=2)  # No. You don't want this line in your code-base
+        highpass_kernel_from_lecture: np.ndarray = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]]) - 1 / 9
+        hp_result: np.ndarray = sg.convolve(useless_image, highpass_kernel_from_lecture, 'same')
         plt.subplot(212, sharex=ax, sharey=ax)
-        plt.imshow(image)
+        plt.imshow(hp_result)
         plt.title('Some useless image for you')
         plt.suptitle("When you zoom on one, the other zooms too :-)")
 
@@ -184,18 +194,6 @@ def parse_arguments(argv: Optional[Sequence[str]]):
 
     return args
 
-def load_ground_truth(meta_table):
-    """
-    Load ground truth annotations for each image in the meta table.
-    This could be reading from JSON files that contain traffic light annotations.
-    """
-    ground_truths = {}
-    for _, row in meta_table.iterrows():
-        json_path = row[JSON_PATH]
-        if json_path is not None:
-            gt_data = json.loads(Path(json_path).read_text())
-            ground_truths[row[IMAG_PATH]] = gt_data['objects']
-    return ground_truths
 
 def main(argv=None):
     """
@@ -220,11 +218,8 @@ def main(argv=None):
     all_results: DataFrame = run_on_list(meta_table, test_find_tfl_lights, args)
     combined_df: DataFrame = pd.concat([pd.DataFrame(columns=CSV_OUTPUT), all_results], ignore_index=True)
 
-    # Load ground truth data for each image
-    ground_truths = load_ground_truth(meta_table)
-
     # make crops out of the coordinates from the DataFrame
-    crops_df: DataFrame = create_crops(combined_df, ground_truths)
+    crops_df: DataFrame = create_crops(combined_df)
 
     # If you entered the zoom variable in the create_crops func, then extract it variable from the crops_df put it in
     # the combined_df.
