@@ -45,7 +45,7 @@ ATTENTION_RESULT: List[str] = [RELEVANT_IMAGE_PATH, X, Y, ZOOM, COL]
 
 # Files path
 BASE_SNC_DIR: Path = Path.cwd().parent
-DATA_DIR: Path = (BASE_SNC_DIR / 'mobileye/data')
+DATA_DIR: Path = (BASE_SNC_DIR / 'mobileye-team-5-mobileye/data')
 CROP_DIR: Path = DATA_DIR / 'crops'
 ATTENTION_PATH: Path = DATA_DIR / 'attention_results'
 
