@@ -56,6 +56,8 @@ CROP_CSV_NAME: str = 'crop_results.csv'
 # File names (directories to be appended automatically)
 TFLS_CSV: str = 'tfls.csv'
 CSV_OUTPUT_NAME: str = 'results.csv'
-
+  
 CROP_WIDTH: int = 40
 CROP_HEIGHT: int = 60
+
+RADIUS = 'radius'

@@ -1,6 +1,6 @@
-# This file contains the skeleton you can use for traffic light attention
 import json
 import argparse
+import math
 from datetime import datetime
 from argparse import Namespace
 from pathlib import Path
@@ -11,7 +11,7 @@ from matplotlib.axes import Axes
 # Internal imports... Should not fail
 from consts import IMAG_PATH, JSON_PATH, NAME, SEQ_IMAG, X, Y, COLOR, RED, GRN, DATA_DIR, TFLS_CSV, CSV_OUTPUT, \
     SEQ, CROP_DIR, CROP_CSV_NAME, ATTENTION_RESULT, ATTENTION_CSV_NAME, ZOOM, RELEVANT_IMAGE_PATH, COL, ATTENTION_PATH, \
-    CSV_INPUT
+    CSV_INPUT, RADIUS
 from misc_goodies import show_image_and_gt
 from data_utils import get_images_metadata
 from crops_creator import create_crops
@@ -27,85 +27,82 @@ from PIL import Image
 import matplotlib.pyplot as plt
 from matplotlib import colors
 
-
-def find_tfl_lights(c_image: np.ndarray, **kwargs) -> Dict[str, Any]:
+# Additional imports
+import cv2
+import imutils
+def find_tfl_lights(c_image_path: str, **kwargs) -> Dict[str, Any]:
     """
-    Detect candidates for traffic lights using color thresholding and connected component analysis.
-
-    :param c_image: a H*W*3 RGB image of dtype np.float32 (values in 0-1 range).
+    Detect candidates for TFL lights and return coordinates for red and green lights.
+    :param c_image_path: Path to the image file.
     :param kwargs: Additional arguments.
-    :return: Dictionary with keys 'x', 'y', 'col', each containing a list.
+    :return: Dictionary with keys 'x', 'y', 'col' containing lists for red and green light coordinates and colors.
     """
 
-    # Convert RGB image to HSV color space
-    hsv_image = colors.rgb_to_hsv(c_image)
+    # Load the image
+    image = cv2.imread(c_image_path)
 
-    # Extract the Hue, Saturation, and Value channels
-    hue = hsv_image[:, :, 0]
-    sat = hsv_image[:, :, 1]
-    val = hsv_image[:, :, 2]
+    # Prepare lists for red and green light coordinates
+    x_red, y_red = [], []
+    x_green, y_green = [],[]
+    colors = []  # This list will store color values (RED, GRN)
 
-    # Define thresholds for red and green colors
-    # Red color thresholds (Hue around 0 and 1)
-    red_mask = (((hue < 0.05) | (hue > 0.95)) & (sat > 0.5) & (val > 0.5))
+    # Convert image to HSV color space for better color segmentation
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
-    # Green color thresholds (Hue around 0.33)
-    green_mask = ((hue > 0.25) & (hue < 0.4) & (sat > 0.5) & (val > 0.5))
+    # Define the HSV range for red (manual adjustment to capture the full red range)
+    lower_red_manual1 = np.array([0, 50, 50])
+    upper_red_manual1 = np.array([10, 255, 255])
+    lower_red_manual2 = np.array([170, 50, 50])
+    upper_red_manual2 = np.array([180, 255, 255])
 
-    # Apply morphological operations to remove small noises
-    structure_element = ndimage.generate_binary_structure(2, 1)
-    red_mask = ndimage.binary_opening(red_mask, structure_element)
-    green_mask = ndimage.binary_opening(green_mask, structure_element)
+    # Threshold the HSV image to get only red colors
+    mask_red1 = cv2.inRange(hsv, lower_red_manual1, upper_red_manual1)
+    mask_red2 = cv2.inRange(hsv, lower_red_manual2, upper_red_manual2)
+    red_thresh = cv2.bitwise_or(mask_red1, mask_red2)  # Combine both red ranges
 
-    # Label connected components
-    labeled_red, num_features_red = ndimage.label(red_mask)
-    labeled_green, num_features_green = ndimage.label(green_mask)
+    # Define the HSV range for green
+    lower_green = np.array([32, 74, 64])
+    upper_green = np.array([119, 255, 220])
+    green_thresh = cv2.inRange(hsv, lower_green, upper_green)
 
-    x_red = []
-    y_red = []
-    x_green = []
-    y_green = []
+    # Now, instead of finding circles or contours, we just look for non-zero pixels in the masks
+    red_coords = np.column_stack(np.where(red_thresh > 0))  # Get all pixel coordinates where red is detected
+    green_coords = np.column_stack(np.where(green_thresh > 0))  # Get all pixel coordinates where green is detected
 
-    # For red components
-    for label in range(1, num_features_red + 1):
-        indices = np.argwhere(labeled_red == label)
-        if indices.size == 0:
-            continue
-        y_coords, x_coords = indices[:, 0], indices[:, 1]
-        x_mean = x_coords.mean()
-        y_mean = y_coords.mean()
-        x_red.append(x_mean)
-        y_red.append(y_mean)
+    # Append red pixel coordinates
+    for coord in red_coords:
+        x_red.append(coord[1])  # X is the column index in the image
+        y_red.append(coord[0])  # Y is the row index in the image
+        colors.append(RED)
 
-    # For green components
-    for label in range(1, num_features_green + 1):
-        indices = np.argwhere(labeled_green == label)
-        if indices.size == 0:
-            continue
-        y_coords, x_coords = indices[:, 0], indices[:, 1]
-        x_mean = x_coords.mean()
-        y_mean = y_coords.mean()
-        x_green.append(x_mean)
-        y_green.append(y_mean)
+    # Append green pixel coordinates
+    for coord in green_coords:
+        x_green.append(coord[1])  # X is the column index in the image
+        y_green.append(coord[0])  # Y is the row index in the image
+        colors.append(GRN)
+
+    # Combine red and green detections into one set of coordinates
+    x_coords = x_red + x_green
+    y_coords = y_red + y_green
 
     return {
-        X: x_red + x_green,
-        Y: y_red + y_green,
-        COLOR: [RED] * len(x_red) + [GRN] * len(x_green),
+        X: x_coords,
+        Y: y_coords,
+        COLOR: colors,
     }
-
-
+  
 def test_find_tfl_lights(row: Series, args: Namespace) -> DataFrame:
     """
     Run the attention code-base
     """
     image_path: str = row[IMAG_PATH]
     json_path: str = row[JSON_PATH]
-    image: np.ndarray = np.array(Image.open(image_path), dtype=np.float32) / 255
+
+    # Load the image
+    image: np.ndarray = np.array(Image.open(image_path))
 
     if args.debug and json_path is not None:
-        # This code-base demonstrates the fact you can read the bounding polygons from the json files
-        # Then plot them on the image. Try it if you think you want to. Not a must...
+        # Load ground truth data if available
         gt_data: Dict[str, Any] = json.loads(Path(json_path).read_text())
         what: List[str] = ['traffic light']
         objects: List[Dict[str, Any]] = [o for o in gt_data['objects'] if o['label'] in what]
@@ -113,40 +110,44 @@ def test_find_tfl_lights(row: Series, args: Namespace) -> DataFrame:
     else:
         ax = None
 
-    # In case you want, you can pass any parameter to find_tfl_lights, because it uses **kwargs
-    attention_dict: Dict[str, Any] = find_tfl_lights(image, some_threshold=42, debug=args.debug)
+    # Call your find_tfl_lights function
+    attention_dict: Dict[str, Any] = find_tfl_lights(image_path, some_threshold=42, debug=args.debug)
     attention: DataFrame = pd.DataFrame(attention_dict)
 
-    # Copy all image metadata from the row into the results, so we can track it later
+    # Copy all image metadata from the row into the results
     for k, v in row.items():
         attention[k] = v
 
-    tfl_x: np.ndarray = attention[X].values
-    tfl_y: np.ndarray = attention[Y].values
-    color: np.ndarray = attention[COLOR].values
+    if attention.empty:
+        print(f"No detections in image: {image_path}")
+        tfl_x = np.array([])
+        tfl_y = np.array([])
+        color = np.array([], dtype=str)
+    else:
+        tfl_x: np.ndarray = attention[X].values
+        tfl_y: np.ndarray = attention[Y].values
+        color: np.ndarray = attention[COLOR].values.astype(str)
+
     is_red = color == RED
     is_green = color == GRN
 
-    print(f"Image: {image_path}, {is_red.sum()} reds, {is_green.sum()} greens")
+    print(f"Image: {image_path}, {is_red.sum()} reds, {is_green.sum()} greens..")
 
     if args.debug:
-        # Show the image with the detections
+        # Plotting detections
         plt.figure(f"{row[SEQ_IMAG]}: {row[NAME]} detections")
         plt.clf()
         plt.subplot(211, sharex=ax, sharey=ax)
         plt.imshow(image)
         plt.title('Original image.. Always try to compare your output to it')
         plt.plot(tfl_x[is_red], tfl_y[is_red], 'rx', markersize=4)
-        plt.plot(tfl_x[~is_red], tfl_y[~is_red], 'g+', markersize=4)
-
-        # Show clear image
+        plt.plot(tfl_x[is_green], tfl_y[is_green], 'g+', markersize=4)
+        # Display the thresholded image (optional)
         plt.subplot(212, sharex=ax, sharey=ax)
-        plt.imshow(image)
-        plt.title('Some useless image for you')
+        plt.imshow(cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB))
+        plt.title('Image with Detections')
         plt.suptitle("When you zoom on one, the other zooms too :-)")
-
     return attention
-
 
 def prepare_list(in_csv_file: Path, args: Namespace) -> DataFrame:
     """
@@ -197,16 +198,27 @@ def save_df_for_part_2(crops_df: DataFrame, results_df: DataFrame):
     results_sorted: DataFrame = results_df.sort_values(by=SEQ_IMAG)
 
     attention_df: DataFrame = DataFrame(columns=ATTENTION_RESULT)
-    row_template: Dict[str, Any] = {RELEVANT_IMAGE_PATH: '', X: '', Y: '', ZOOM: 1, COL: ''}
+    row_template: Dict[str, Any] = {RELEVANT_IMAGE_PATH: '', X: '', Y: '', ZOOM: 0, COL: ''}
     for index, row in results_sorted.iterrows():
         row_template[RELEVANT_IMAGE_PATH] = row[IMAG_PATH]
-        # row_template[ZOOM] = results_sorted['zoom_value or whatever'] # TODO: this will break
         row_template[X], row_template[Y] = row[X], row[Y]
         row_template[COL] = row[COLOR]
         attention_df = attention_df._append(row_template, ignore_index=True)
     attention_df.to_csv(ATTENTION_PATH / ATTENTION_CSV_NAME, index=False)
     crops_sorted.to_csv(ATTENTION_PATH / CROP_CSV_NAME, index=False)
 
+def load_ground_truth(meta_table):
+    """
+    Load ground truth annotations for each image in the meta table.
+    This could be reading from JSON files that contain traffic light annotations.
+    """
+    ground_truths = {}
+    for _, row in meta_table.iterrows():
+        json_path = row[JSON_PATH]
+        if json_path is not None:
+            gt_data = json.loads(Path(json_path).read_text())
+            ground_truths[row[IMAG_PATH]] = gt_data['objects']
+    return ground_truths
 
 def parse_arguments(argv: Optional[Sequence[str]]):
     """
@@ -225,18 +237,6 @@ def parse_arguments(argv: Optional[Sequence[str]]):
 
     return args
 
-def load_ground_truth(meta_table):
-    """
-    Load ground truth annotations for each image in the meta table.
-    This could be reading from JSON files that contain traffic light annotations.
-    """
-    ground_truths = {}
-    for _, row in meta_table.iterrows():
-        json_path = row[JSON_PATH]
-        if json_path is not None:
-            gt_data = json.loads(Path(json_path).read_text())
-            ground_truths[row[IMAG_PATH]] = gt_data['objects']
-    return ground_truths
 
 def calculate_bbox_size(polygon: np.ndarray) -> int:
     """
@@ -301,7 +301,6 @@ def main(argv=None):
 
     :param argv: In case you want to programmatically run this.
     """
-
     args: Namespace = parse_arguments(argv)
     default_csv_file: Path = DATA_DIR / TFLS_CSV
     csv_filename: Path = Path(args.in_csv_file) if args.in_csv_file else default_csv_file
@@ -330,12 +329,9 @@ def main(argv=None):
                 _, _, area = calculate_bbox_size(polygon)
                 zoom_factor = determine_zoom_factor(area, size_stats['avg_width'] * size_stats['avg_height'])
                 print(f"Zoom factor for {image_path}: {zoom_factor}")
-
+                
     # make crops out of the coordinates from the DataFrame
-    crops_df: DataFrame = create_crops(combined_df, ground_truths)
-
-    # If you entered the zoom variable in the create_crops func, then extract it variable from the crops_df put it in
-    # the combined_df.
+    crops_df: DataFrame = create_crops(combined_df)
 
     # save the DataFrames in the right format for stage two.
     save_df_for_part_2(crops_df, combined_df)
