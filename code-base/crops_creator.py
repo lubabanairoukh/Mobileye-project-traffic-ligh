@@ -1,12 +1,13 @@
 from typing import Dict, Any, Tuple, List
 
 from consts import CROP_DIR, CROP_RESULT, SEQ, IS_TRUE, IGNOR, CROP_PATH, X0, X1, Y0, Y1, COLOR, SEQ_IMAG, COL, X, Y, \
-    GTIM_PATH, ZOOM, IMAG_PATH
+    GTIM_PATH, ZOOM, IMAG_PATH, CROP_WIDTH, CROP_HEIGHT, NAME, JSON_PATH, CSV_OUTPUT
 
 from pandas import DataFrame
 
 import numpy as np
 from PIL import Image
+from scipy.ndimage import zoom as nd_zoom
 
 
 def make_crop(image: np.ndarray, x: float, y: float, crop_width: int = 40, crop_height: int = 60) -> Tuple[int, int, int, int, np.ndarray]:
@@ -61,56 +62,68 @@ def compute_iou(boxA, boxB):
     iou = interArea / float(boxAArea + boxBArea - interArea)
     return iou
 
-def create_crops(df: DataFrame, ground_truths: Dict[str, Any]) -> DataFrame:
+def create_crops(df: DataFrame, ground_truths: Dict[str, List[Dict[str, Any]]], zoom_factor: float = 1.0) -> DataFrame:
     # Create the directory for crops if it doesn't exist
     if not CROP_DIR.exists():
         CROP_DIR.mkdir()
 
-    # Initialize the result DataFrame
+    # Initialize the result DataFrame with CROP_RESULT columns
     result_df = DataFrame(columns=CROP_RESULT)
 
-    # Template for each row in the result DataFrame
-    result_template: Dict[Any] = {SEQ: '', IS_TRUE: '', IGNOR: '', CROP_PATH: '', X0: '', X1: '', Y0: '', Y1: '',
-                                  COL: '', ZOOM: 1}
-    
     for index, row in df.iterrows():
-        result_template[SEQ] = row[SEQ_IMAG]
-        result_template[COL] = row[COLOR]
+        # Template for each row of results
+        result_template: Dict[Any] = {
+            SEQ: row[SEQ_IMAG], 
+            IS_TRUE: '', 
+            IGNOR: '', 
+            CROP_PATH: '',
+            X0: '', 
+            X1: '', 
+            Y0: '', 
+            Y1: '', 
+            COL: row[COLOR], 
+            ZOOM: zoom_factor  # Set the zoom factor dynamically
+        }
 
-        # Get the coordinates and image path
+        # Coordinates of the traffic light
         x = row[X]
         y = row[Y]
-        image_path = row[IMAG_PATH]
 
         # Load the image
-        image = np.array(Image.open(image_path))  # Or use cv2.imread(image_path)
+        image = np.array(Image.open(row[IMAG_PATH]))
 
-        # Define crop size (e.g., width = 40, height = 60 for rectangular crops)
-        crop_width = 40
-        crop_height = 60
+        # Apply zoom to the image
+        if zoom_factor != 1.0:
+            image = nd_zoom(image, (zoom_factor, zoom_factor, 1))  # Zoom the image
 
-        # Create the crop around the coordinates (with rectangular crop sizes)
+        # Define crop size (e.g., 40x60 pixels)
+        crop_width = int(CROP_WIDTH / zoom_factor)
+        crop_height = int(CROP_HEIGHT / zoom_factor)
+
+        # Create the crop based on coordinates
         x0, x1, y0, y1, crop = make_crop(image, x, y, crop_width=crop_width, crop_height=crop_height)
 
-        # Create a unique filename and save the crop
+        # Save the crop image
         crop_filename = f"crop_{row[SEQ_IMAG]}_{index}.png"
         crop_path = CROP_DIR / crop_filename
         Image.fromarray(crop).save(crop_path)
 
+        # Set the crop path and bounding box coordinates in the result
+        result_template[CROP_PATH] = crop_path.as_posix()
+        result_template[X0], result_template[X1] = x0, x1
+        result_template[Y0], result_template[Y1] = y0, y1
+
         # Get the ground truth for this image
         gt_annotations = ground_truths.get(row[IMAG_PATH], [])
 
-        # Check if the crop contains a traffic light
+        # Check if the crop contains the traffic light using ground truth data
         is_true, is_ignore = check_crop(gt_annotations, x0, x1, y0, y1)
 
-        # Fill the result template with crop info
-        result_template[X0], result_template[X1] = x0, x1
-        result_template[Y0], result_template[Y1] = y0, y1
-        result_template[CROP_PATH] = crop_path.as_posix()
+        # Update the result template with crop check information
         result_template[IS_TRUE] = is_true
         result_template[IGNOR] = is_ignore
 
-        # Append the result to the DataFrame
+        # Append the result to the result DataFrame
         result_df = result_df._append(result_template, ignore_index=True)
-    
+
     return result_df
