@@ -45,7 +45,7 @@ ATTENTION_RESULT: List[str] = [RELEVANT_IMAGE_PATH, X, Y, ZOOM, COL]
 
 # Files path
 BASE_SNC_DIR: Path = Path.cwd().parent
-DATA_DIR: Path = (BASE_SNC_DIR / 'mobileye-team-5-mobileye/data')
+DATA_DIR: Path = (BASE_SNC_DIR / 'data')
 CROP_DIR: Path = DATA_DIR / 'crops'
 ATTENTION_PATH: Path = DATA_DIR / 'attention_results'
 
@@ -56,3 +56,6 @@ CROP_CSV_NAME: str = 'crop_results.csv'
 # File names (directories to be appended automatically)
 TFLS_CSV: str = 'tfls.csv'
 CSV_OUTPUT_NAME: str = 'results.csv'
+
+CROP_WIDTH: int = 40
+CROP_HEIGHT: int = 60
