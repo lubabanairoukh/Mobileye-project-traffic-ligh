@@ -1,17 +1,17 @@
 import json
 import argparse
-import math  # new
+import math
 from datetime import datetime
 from argparse import Namespace
 from pathlib import Path
 from typing import Sequence, Optional, List, Any, Dict
-from typing import Dict, Any, Optional, List # new
+
 from matplotlib.axes import Axes
 
 # Internal imports... Should not fail
 from consts import IMAG_PATH, JSON_PATH, NAME, SEQ_IMAG, X, Y, COLOR, RED, GRN, DATA_DIR, TFLS_CSV, CSV_OUTPUT, \
     SEQ, CROP_DIR, CROP_CSV_NAME, ATTENTION_RESULT, ATTENTION_CSV_NAME, ZOOM, RELEVANT_IMAGE_PATH, COL, ATTENTION_PATH, \
-    CSV_INPUT, RADIUS# randius new
+    CSV_INPUT, RADIUS
 from misc_goodies import show_image_and_gt
 from data_utils import get_images_metadata
 from crops_creator import create_crops
@@ -26,25 +26,9 @@ from scipy.ndimage import maximum_filter
 from PIL import Image
 import matplotlib.pyplot as plt
 
-
-# all the imports are new
-import numpy as np
-
-import numpy as np
-from typing import Dict, Any, List
-from PIL import Image
-
+# Additional imports
 import cv2
-import numpy as np
-from scipy import signal as sg
-from PIL import Image
-import matplotlib.pyplot as plt
-# import the necessary packages
-from imutils import contours
-import numpy as np
-import argparse
 import imutils
-import cv2
 def find_tfl_lights(c_image_path: str, **kwargs) -> Dict[str, Any]:
     """
     Detect candidates for TFL lights and return coordinates for red and green lights.
@@ -53,75 +37,57 @@ def find_tfl_lights(c_image_path: str, **kwargs) -> Dict[str, Any]:
     :return: Dictionary with keys 'x', 'y', 'col' containing lists for red and green light coordinates and colors.
     """
 
+    # Load the image
     image = cv2.imread(c_image_path)
 
     # Prepare lists for red and green light coordinates
     x_red, y_red = [], []
-    x_green, y_green = [], []
+    x_green, y_green = [],[]
+    colors = []  # This list will store color values (RED, GRN)
 
     # Convert image to HSV color space for better color segmentation
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
-    # Define color ranges for red and green in HSV space
-    lower_red1 = np.array([0, 100, 100])
-    upper_red1 = np.array([10, 255, 255])
-    lower_red2 = np.array([160, 100, 100])
-    upper_red2 = np.array([179, 255, 255])
+    # Define the HSV range for red (manual adjustment to capture the full red range)
+    lower_red_manual1 = np.array([0, 50, 50])
+    upper_red_manual1 = np.array([10, 255, 255])
+    lower_red_manual2 = np.array([170, 50, 50])
+    upper_red_manual2 = np.array([180, 255, 255])
 
-    lower_green = np.array([40, 100, 100])
-    upper_green = np.array([80, 255, 255])
+    # Threshold the HSV image to get only red colors
+    mask_red1 = cv2.inRange(hsv, lower_red_manual1, upper_red_manual1)
+    mask_red2 = cv2.inRange(hsv, lower_red_manual2, upper_red_manual2)
+    red_thresh = cv2.bitwise_or(mask_red1, mask_red2)  # Combine both red ranges
 
-    # Threshold the HSV image to get only red and green colors
-    mask_red1 = cv2.inRange(hsv, lower_red1, upper_red1)
-    mask_red2 = cv2.inRange(hsv, lower_red2, upper_red2)
-    red_thresh = cv2.bitwise_or(mask_red1, mask_red2)
-
+    # Define the HSV range for green
+    lower_green = np.array([32, 74, 64])
+    upper_green = np.array([119, 255, 220])
     green_thresh = cv2.inRange(hsv, lower_green, upper_green)
 
-    # Combine the red and green masks
-    thresh = cv2.bitwise_or(red_thresh, green_thresh)
+    # Now, instead of finding circles or contours, we just look for non-zero pixels in the masks
+    red_coords = np.column_stack(np.where(red_thresh > 0))  # Get all pixel coordinates where red is detected
+    green_coords = np.column_stack(np.where(green_thresh > 0))  # Get all pixel coordinates where green is detected
 
-    # Find contours in the thresholded image
-    cnts = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cnts = imutils.grab_contours(cnts)
+    # Append red pixel coordinates
+    for coord in red_coords:
+        x_red.append(coord[1])  # X is the column index in the image
+        y_red.append(coord[0])  # Y is the row index in the image
+        colors.append(RED)
 
-    aspect_ratio_threshold = 1.5
+    # Append green pixel coordinates
+    for coord in green_coords:
+        x_green.append(coord[1])  # X is the column index in the image
+        y_green.append(coord[0])  # Y is the row index in the image
+        colors.append(GRN)
 
-    colors = []  # This list will store color values (RED, GRN)
+    # Combine red and green detections into one set of coordinates
+    x_coords = x_red + x_green
+    y_coords = y_red + y_green
 
-    # Loop over the contours
-    for (i, c) in enumerate(cnts):
-        area = cv2.contourArea(c)
-
-        if area < 3000:
-            mask = np.zeros(image.shape[:2], dtype="uint8")
-            cv2.drawContours(mask, [c], -1, 255, thickness=cv2.FILLED)
-            avg_color = cv2.mean(image, mask=mask)[:3]
-
-            # Get the bounding box for the contour
-            (x, y, w, h) = cv2.boundingRect(c)
-            aspect_ratio = w / float(h)
-
-            if aspect_ratio >= aspect_ratio_threshold:
-                continue
-
-            ((cX, cY), radius) = cv2.minEnclosingCircle(c)
-
-            # Check if the color is red or green using the mask
-            if np.any(red_thresh[y:y+h, x:x+w]):
-                x_red.append(cX)
-                y_red.append(cY)
-                colors.append(RED)  # Append RED to colors list
-            elif np.any(green_thresh[y:y+h, x:x+w]):
-                x_green.append(cX)
-                y_green.append(cY)
-                colors.append(GRN)  # Append GRN to colors list
-
-    # Return the detected traffic light positions and their colors
     return {
-        X: x_red + x_green,
-        Y: y_red + y_green,
-        COLOR: colors,  # Use the collected colors
+        X: x_coords,
+        Y: y_coords,
+        COLOR: colors,
     }
 
 def test_find_tfl_lights(row: Series, args: Namespace) -> DataFrame:
@@ -130,55 +96,57 @@ def test_find_tfl_lights(row: Series, args: Namespace) -> DataFrame:
     """
     image_path: str = row[IMAG_PATH]
     json_path: str = row[JSON_PATH]
-    image: np.ndarray = np.array(Image.open(image_path), dtype=np.float32) / 255
+
+    # Load the image
+    image: np.ndarray = np.array(Image.open(image_path))
+
     if args.debug and json_path is not None:
-        # This code-base demonstrates the fact you can read the bounding polygons from the json files
-        # Then plot them on the image. Try it if you think you want to. Not a must...
+        # Load ground truth data if available
         gt_data: Dict[str, Any] = json.loads(Path(json_path).read_text())
         what: List[str] = ['traffic light']
         objects: List[Dict[str, Any]] = [o for o in gt_data['objects'] if o['label'] in what]
         ax: Optional[Axes] = show_image_and_gt(image, objects, f"{row[SEQ_IMAG]}: {row[NAME]} GT")
     else:
         ax = None
-    # In case you want, you can pass any parameter to find_tfl_lights, because it uses **kwargs
+
+    # Call your find_tfl_lights function
     attention_dict: Dict[str, Any] = find_tfl_lights(image_path, some_threshold=42, debug=args.debug)
     attention: DataFrame = pd.DataFrame(attention_dict)
-    # Copy all image metadata from the row into the results, so we can track it later
+
+    # Copy all image metadata from the row into the results
     for k, v in row.items():
         attention[k] = v
-    tfl_x: np.ndarray = attention[X].values
-    tfl_y: np.ndarray = attention[Y].values
-    color: np.ndarray = attention[COLOR].values
+
+    if attention.empty:
+        print(f"No detections in image: {image_path}")
+        tfl_x = np.array([])
+        tfl_y = np.array([])
+        color = np.array([], dtype=str)
+    else:
+        tfl_x: np.ndarray = attention[X].values
+        tfl_y: np.ndarray = attention[Y].values
+        color: np.ndarray = attention[COLOR].values.astype(str)
+
     is_red = color == RED
     is_green = color == GRN
 
-
-    # new code
-    #end of new code
     print(f"Image: {image_path}, {is_red.sum()} reds, {is_green.sum()} greens..")
+
     if args.debug:
-        # And here are some tips & tricks regarding matplotlib
-        # They will look like pictures if you use jupyter, and like magic if you use pycharm!
-        # You can zoom one image, and the other will zoom accordingly.
-        # I think you will find it very very useful!
+        # Plotting detections
         plt.figure(f"{row[SEQ_IMAG]}: {row[NAME]} detections")
         plt.clf()
         plt.subplot(211, sharex=ax, sharey=ax)
         plt.imshow(image)
         plt.title('Original image.. Always try to compare your output to it')
         plt.plot(tfl_x[is_red], tfl_y[is_red], 'rx', markersize=4)
-        plt.plot(tfl_x[~is_red], tfl_y[~is_red], 'g+', markersize=4)
-        # Now let's convolve. Cannot convolve a 3D image with a 2D kernel, so I create a 2D image
-        # Note: This image is useless for you, so you solve it yourself
-        useless_image: np.ndarray = np.std(image, axis=2)  # No. You don't want this line in your code-base
-        highpass_kernel_from_lecture: np.ndarray = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]]) - 1 / 9
-        hp_result: np.ndarray = sg.convolve(useless_image, highpass_kernel_from_lecture, 'same')
+        plt.plot(tfl_x[is_green], tfl_y[is_green], 'g+', markersize=4)
+        # Display the thresholded image (optional)
         plt.subplot(212, sharex=ax, sharey=ax)
-        plt.imshow(hp_result)
-        plt.title('Some useless image for you')
+        plt.imshow(cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB))
+        plt.title('Image with Detections')
         plt.suptitle("When you zoom on one, the other zooms too :-)")
     return attention
-
 
 def prepare_list(in_csv_file: Path, args: Namespace) -> DataFrame:
     """
@@ -280,11 +248,11 @@ def main(argv=None):
     combined_df: DataFrame = pd.concat([pd.DataFrame(columns=CSV_OUTPUT), all_results], ignore_index=True)
 
     # make crops out of the coordinates from the DataFrame
-    crops_df: DataFrame = create_crops(combined_df)
+   ## crops_df: DataFrame = create_crops(combined_df)
 
     # save the DataFrames in the right format for stage two.
-    save_df_for_part_2(crops_df, combined_df)
-    print(f"Got a total of {len(combined_df)} results")
+   # save_df_for_part_2(crops_df, combined_df)
+    #print(f"Got a total of {len(combined_df)} results")
 
     if args.debug:
         plt.show(block=True)
