@@ -25,33 +25,74 @@ import scipy.ndimage as ndimage
 from scipy.ndimage import maximum_filter
 from PIL import Image
 import matplotlib.pyplot as plt
+from matplotlib import colors
 
 
 def find_tfl_lights(c_image: np.ndarray, **kwargs) -> Dict[str, Any]:
     """
-    Detect candidates for TFL lights. Use c_image, kwargs and you imagination to implement.
+    Detect candidates for traffic lights using color thresholding and connected component analysis.
 
-    :param c_image: a H*W*3 RGB image of dtype np.uint8 (RGB, 0-255).
-    :param kwargs: Whatever you want.
-    :return: Dictionary with at least the following keys: 'x', 'y', 'col', each containing a list (same lengths).
-    # Note there are no explicit strings in the code-base. ALWAYS USE A CONSTANT VARIABLE INSTEAD!.
+    :param c_image: a H*W*3 RGB image of dtype np.float32 (values in 0-1 range).
+    :param kwargs: Additional arguments.
+    :return: Dictionary with keys 'x', 'y', 'col', each containing a list.
     """
 
-    # Okay... Here's an example of what this function should return. You will write your own of course
-    x_red: List[float] = (np.arange(-100, 100, 20) + c_image.shape[1] / 2).tolist()
-    y_red: List[float] = [c_image.shape[0] / 2 - 120] * len(x_red)
-    x_green: List[float] = x_red
-    y_green: List[float] = [c_image.shape[0] / 2 - 100] * len(x_red)
+    # Convert RGB image to HSV color space
+    hsv_image = colors.rgb_to_hsv(c_image)
 
-    if kwargs.get('debug', False):
-        # This is here just so you know you can do it... Look at parse_arguments() for details
-        if np.random.rand() > kwargs.get('some_threshold', 0) / 45:
-            print("You're lucky, aren't you???")
+    # Extract the Hue, Saturation, and Value channels
+    hue = hsv_image[:, :, 0]
+    sat = hsv_image[:, :, 1]
+    val = hsv_image[:, :, 2]
 
-    return {X: x_red + x_green,
-            Y: y_red + y_green,
-            COLOR: [RED] * len(x_red) + [GRN] * len(x_green),
-            }
+    # Define thresholds for red and green colors
+    # Red color thresholds (Hue around 0 and 1)
+    red_mask = (((hue < 0.05) | (hue > 0.95)) & (sat > 0.5) & (val > 0.5))
+
+    # Green color thresholds (Hue around 0.33)
+    green_mask = ((hue > 0.25) & (hue < 0.4) & (sat > 0.5) & (val > 0.5))
+
+    # Apply morphological operations to remove small noises
+    structure_element = ndimage.generate_binary_structure(2, 1)
+    red_mask = ndimage.binary_opening(red_mask, structure_element)
+    green_mask = ndimage.binary_opening(green_mask, structure_element)
+
+    # Label connected components
+    labeled_red, num_features_red = ndimage.label(red_mask)
+    labeled_green, num_features_green = ndimage.label(green_mask)
+
+    x_red = []
+    y_red = []
+    x_green = []
+    y_green = []
+
+    # For red components
+    for label in range(1, num_features_red + 1):
+        indices = np.argwhere(labeled_red == label)
+        if indices.size == 0:
+            continue
+        y_coords, x_coords = indices[:, 0], indices[:, 1]
+        x_mean = x_coords.mean()
+        y_mean = y_coords.mean()
+        x_red.append(x_mean)
+        y_red.append(y_mean)
+
+    # For green components
+    for label in range(1, num_features_green + 1):
+        indices = np.argwhere(labeled_green == label)
+        if indices.size == 0:
+            continue
+        y_coords, x_coords = indices[:, 0], indices[:, 1]
+        x_mean = x_coords.mean()
+        y_mean = y_coords.mean()
+        x_green.append(x_mean)
+        y_green.append(y_mean)
+
+    return {
+        X: x_red + x_green,
+        Y: y_red + y_green,
+        COLOR: [RED] * len(x_red) + [GRN] * len(x_green),
+    }
 
 
 def test_find_tfl_lights(row: Series, args: Namespace) -> DataFrame:
@@ -197,6 +238,61 @@ def load_ground_truth(meta_table):
             ground_truths[row[IMAG_PATH]] = gt_data['objects']
     return ground_truths
 
+def calculate_bbox_size(polygon: np.ndarray) -> int:
+    """
+    Given a polygon (bounding box), calculate the width, height, and area of the box.
+    :param polygon: List of coordinates of the bounding box
+    :return: Area (width * height) of the bounding box in pixels
+    """
+    x_min = np.min(polygon[:, 0])
+    x_max = np.max(polygon[:, 0])
+    y_min = np.min(polygon[:, 1])
+    y_max = np.max(polygon[:, 1])
+    
+    width = x_max - x_min
+    height = y_max - y_min
+    area = width * height
+    
+    return width, height, area
+
+def find_min_max_traffic_light_size(ground_truths: Dict[str, List[Dict[str, any]]]) -> Dict[str, float]:
+    """
+    Find the minimum and maximum sizes of traffic lights in the dataset using ground truth data.
+    :param ground_truths: Dictionary with image paths as keys and ground truth annotations as values
+    :return: Dictionary with min and max size (area), and typical width and height
+    """
+    min_size = float('inf')
+    max_size = float('-inf')
+    sizes = []
+
+    for image_path, objects in ground_truths.items():
+        for obj in objects:
+            if obj['label'] == 'traffic light':
+                polygon = np.array(obj['polygon'])
+                width, height, area = calculate_bbox_size(polygon)
+                sizes.append(area)
+                min_size = min(min_size, area)
+                max_size = max(max_size, area)
+    
+    avg_width = np.mean([calculate_bbox_size(np.array(obj['polygon']))[0] for obj_list in ground_truths.values() for obj in obj_list if obj['label'] == 'traffic light'])
+    avg_height = np.mean([calculate_bbox_size(np.array(obj['polygon']))[1] for obj_list in ground_truths.values() for obj in obj_list if obj['label'] == 'traffic light'])
+    
+    return {
+        'min_size': min_size,
+        'max_size': max_size,
+        'avg_width': avg_width,
+        'avg_height': avg_height
+    }
+
+def determine_zoom_factor(size: float, typical_size: float) -> float:
+    """
+    Calculate the zoom factor based on the size of the traffic light and the typical size.
+    :param size: Area of the detected traffic light bounding box
+    :param typical_size: Average or typical traffic light size in the dataset
+    :return: Suggested zoom factor
+    """
+    return typical_size / size
+
 def main(argv=None):
     """
     It's nice to have a standalone tester for the algorithm.
@@ -222,6 +318,18 @@ def main(argv=None):
 
     # Load ground truth data for each image
     ground_truths = load_ground_truth(meta_table)
+
+    # Find the minimum, maximum, and average sizes of traffic lights in the dataset
+    size_stats = find_min_max_traffic_light_size(ground_truths)
+
+    # For each image, determine the zoom factor based on the traffic light size
+    for image_path, objects in ground_truths.items():
+        for obj in objects:
+            if obj['label'] == 'traffic light':
+                polygon = np.array(obj['polygon'])
+                _, _, area = calculate_bbox_size(polygon)
+                zoom_factor = determine_zoom_factor(area, size_stats['avg_width'] * size_stats['avg_height'])
+                print(f"Zoom factor for {image_path}: {zoom_factor}")
 
     # make crops out of the coordinates from the DataFrame
     crops_df: DataFrame = create_crops(combined_df, ground_truths)

@@ -17,6 +17,8 @@ def make_crop(image: np.ndarray, x: float, y: float, crop_width: int = 40, crop_
     """
     x = int(x)
     y = int(y)
+
+    print(x, y)
     
     half_width = crop_width // 2
     half_height = crop_height // 2
@@ -31,8 +33,7 @@ def make_crop(image: np.ndarray, x: float, y: float, crop_width: int = 40, crop_
 
 def check_crop(ground_truth: List[Dict[str, Any]], x0: int, x1: int, y0: int, y1: int) -> Tuple[bool, bool]:
     """
-    Here you check if your crop contains a traffic light or not.
-    Try using the ground truth to do that.
+    Here you check if your crop contains a traffic light or not by checking with ground proof
     """
     crop_box = [x0, y0, x1, y1]
     for obj in ground_truth:
