@@ -25,6 +25,7 @@ import scipy.ndimage as ndimage
 from scipy.ndimage import maximum_filter
 from PIL import Image
 import matplotlib.pyplot as plt
+from matplotlib import colors
 
 # Additional imports
 import cv2
@@ -89,7 +90,7 @@ def find_tfl_lights(c_image_path: str, **kwargs) -> Dict[str, Any]:
         Y: y_coords,
         COLOR: colors,
     }
-
+  
 def test_find_tfl_lights(row: Series, args: Namespace) -> DataFrame:
     """
     Run the attention code-base
@@ -206,6 +207,18 @@ def save_df_for_part_2(crops_df: DataFrame, results_df: DataFrame):
     attention_df.to_csv(ATTENTION_PATH / ATTENTION_CSV_NAME, index=False)
     crops_sorted.to_csv(ATTENTION_PATH / CROP_CSV_NAME, index=False)
 
+def load_ground_truth(meta_table):
+    """
+    Load ground truth annotations for each image in the meta table.
+    This could be reading from JSON files that contain traffic light annotations.
+    """
+    ground_truths = {}
+    for _, row in meta_table.iterrows():
+        json_path = row[JSON_PATH]
+        if json_path is not None:
+            gt_data = json.loads(Path(json_path).read_text())
+            ground_truths[row[IMAG_PATH]] = gt_data['objects']
+    return ground_truths
 
 def parse_arguments(argv: Optional[Sequence[str]]):
     """
@@ -224,6 +237,61 @@ def parse_arguments(argv: Optional[Sequence[str]]):
 
     return args
 
+
+def calculate_bbox_size(polygon: np.ndarray) -> int:
+    """
+    Given a polygon (bounding box), calculate the width, height, and area of the box.
+    :param polygon: List of coordinates of the bounding box
+    :return: Area (width * height) of the bounding box in pixels
+    """
+    x_min = np.min(polygon[:, 0])
+    x_max = np.max(polygon[:, 0])
+    y_min = np.min(polygon[:, 1])
+    y_max = np.max(polygon[:, 1])
+    
+    width = x_max - x_min
+    height = y_max - y_min
+    area = width * height
+    
+    return width, height, area
+
+def find_min_max_traffic_light_size(ground_truths: Dict[str, List[Dict[str, any]]]) -> Dict[str, float]:
+    """
+    Find the minimum and maximum sizes of traffic lights in the dataset using ground truth data.
+    :param ground_truths: Dictionary with image paths as keys and ground truth annotations as values
+    :return: Dictionary with min and max size (area), and typical width and height
+    """
+    min_size = float('inf')
+    max_size = float('-inf')
+    sizes = []
+
+    for image_path, objects in ground_truths.items():
+        for obj in objects:
+            if obj['label'] == 'traffic light':
+                polygon = np.array(obj['polygon'])
+                width, height, area = calculate_bbox_size(polygon)
+                sizes.append(area)
+                min_size = min(min_size, area)
+                max_size = max(max_size, area)
+    
+    avg_width = np.mean([calculate_bbox_size(np.array(obj['polygon']))[0] for obj_list in ground_truths.values() for obj in obj_list if obj['label'] == 'traffic light'])
+    avg_height = np.mean([calculate_bbox_size(np.array(obj['polygon']))[1] for obj_list in ground_truths.values() for obj in obj_list if obj['label'] == 'traffic light'])
+    
+    return {
+        'min_size': min_size,
+        'max_size': max_size,
+        'avg_width': avg_width,
+        'avg_height': avg_height
+    }
+
+def determine_zoom_factor(size: float, typical_size: float) -> float:
+    """
+    Calculate the zoom factor based on the size of the traffic light and the typical size.
+    :param size: Area of the detected traffic light bounding box
+    :param typical_size: Average or typical traffic light size in the dataset
+    :return: Suggested zoom factor
+    """
+    return typical_size / size
 
 def main(argv=None):
     """
@@ -247,12 +315,27 @@ def main(argv=None):
     all_results: DataFrame = run_on_list(meta_table, test_find_tfl_lights, args)
     combined_df: DataFrame = pd.concat([pd.DataFrame(columns=CSV_OUTPUT), all_results], ignore_index=True)
 
+    # Load ground truth data for each image
+    ground_truths = load_ground_truth(meta_table)
+
+    # Find the minimum, maximum, and average sizes of traffic lights in the dataset
+    size_stats = find_min_max_traffic_light_size(ground_truths)
+
+    # For each image, determine the zoom factor based on the traffic light size
+    for image_path, objects in ground_truths.items():
+        for obj in objects:
+            if obj['label'] == 'traffic light':
+                polygon = np.array(obj['polygon'])
+                _, _, area = calculate_bbox_size(polygon)
+                zoom_factor = determine_zoom_factor(area, size_stats['avg_width'] * size_stats['avg_height'])
+                print(f"Zoom factor for {image_path}: {zoom_factor}")
+                
     # make crops out of the coordinates from the DataFrame
-   ## crops_df: DataFrame = create_crops(combined_df)
+    crops_df: DataFrame = create_crops(combined_df)
 
     # save the DataFrames in the right format for stage two.
-   # save_df_for_part_2(crops_df, combined_df)
-    #print(f"Got a total of {len(combined_df)} results")
+    save_df_for_part_2(crops_df, combined_df)
+    print(f"Got a total of {len(combined_df)} results")
 
     if args.debug:
         plt.show(block=True)
