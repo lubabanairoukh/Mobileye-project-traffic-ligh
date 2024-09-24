@@ -10,7 +10,7 @@ from matplotlib.axes import Axes
 # Internal imports... Should not fail
 from consts import IMAG_PATH, JSON_PATH, NAME, SEQ_IMAG, X, Y, COLOR, RED, GRN, DATA_DIR, TFLS_CSV, CSV_OUTPUT, \
     SEQ, CROP_DIR, CROP_CSV_NAME, ATTENTION_RESULT, ATTENTION_CSV_NAME, ZOOM, RELEVANT_IMAGE_PATH, COL, ATTENTION_PATH, \
-    CSV_INPUT, RADIUS
+    CSV_INPUT, RADIUS, BASE_RADIUS
 from misc_goodies import show_image_and_gt
 from data_utils import get_images_metadata
 from crops_creator import create_crops
@@ -122,97 +122,89 @@ def is_circular(contour: np.ndarray, tolerance: float = 0.5) -> bool:
     return 1 - tolerance <= circularity <= 1 + tolerance
 
 
-def find_light_contours(image: np.ndarray, mask: np.ndarray, gray_image: np.ndarray, min_brightness: int = 100) -> Tuple[List[int], List[int], List[str]]:
+def find_light_contours(image: np.ndarray, mask: np.ndarray, gray_image: np.ndarray, min_brightness: int = 100) -> Tuple[List[int], List[int], List[str], List[float]]:
     """
     Finds contours of possible traffic lights using both color detection and circularity check.
     :param image: Input image.
     :param mask: Binary mask for detecting lights.
     :param gray_image: Grayscale image for brightness and darkness checks.
     :param min_brightness: Minimum brightness threshold for detecting lights.
-    :return: Lists of x and y coordinates of detected lights and their associated colors.
+    :return: Lists of x and y coordinates of detected lights, their associated colors, and radii.
     """
     # Find contours from the mask (color-based detection)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Prepare to store coordinates and colors of detected lights
-    x_coords, y_coords, colors = [], [], []
+    # Prepare to store coordinates, colors, and radii of detected lights
+    x_coords, y_coords, colors, radii = [], [], [], []
 
     for contour in contours:
         area = cv2.contourArea(contour)
-        if 100 < area < 2000 and is_circular(contour, tolerance=0.3):  # Filter by size and circularity
+        if 100 < area < 2000 and is_circular(contour, tolerance=0.3):
+            # Get bounding rectangle
             x, y, w, h = cv2.boundingRect(contour)
             aspect_ratio = w / h
-            if 0.8 < aspect_ratio < 1.2:  # Further filter for square-shaped bounding boxes (near circular)
-                # Check brightness in grayscale
-                roi = gray_image[max(0, y - 10):min(gray_image.shape[0], y + h + 10),
-                                 max(0, x - 10):min(gray_image.shape[1], x + w + 10)]
-                brightness = np.mean(roi)
-                if brightness > min_brightness:
-                    # Check for dark area below (for green) or above (for red)
-                    below_roi = gray_image[y + h:min(gray_image.shape[0], y + 2 * h), x:x + w]
-                    above_roi = gray_image[max(0, y - h):y, x:x + w]
-
-                    if is_dark_area(below_roi):
-                        x_coords.append(x + w // 2)
-                        y_coords.append(y + h // 2)
-                        colors.append('green')
-                    elif is_dark_area(above_roi):
-                        x_coords.append(x + w // 2)
-                        y_coords.append(y + h // 2)
-                        colors.append('red')
-
-    return x_coords, y_coords, colors
+            if 0.8 < aspect_ratio < 1.2:  # Filter for near-circular shapes
+                # Calculate radius
+                radius = np.sqrt(area / np.pi)
+                radii.append(radius)
+                # Append center coordinates
+                x_coords.append(x + w // 2)
+                y_coords.append(y + h // 2)
+                # Determine color (implement your logic here)
+                colors.append('green' or 'red')  # Replace with actual color detection logic
+    return x_coords, y_coords, colors, radii
 
 
-def group_close_detections(x_coords: List[int], y_coords: List[int], colors: List[str], threshold: int = 30) -> Tuple[List[int], List[int], List[str]]:
+def group_close_detections(x_coords: List[int], y_coords: List[int], colors: List[str], radii: List[float], threshold: int = 30) -> Tuple[List[int], List[int], List[str], List[float]]:
     """
     Groups detections that are too close together based on a distance threshold.
     :param x_coords: List of x coordinates of detected lights.
     :param y_coords: List of y coordinates of detected lights.
     :param colors: List of detected light colors ('red', 'green').
+    :param radii: List of radii of detected lights.
     :param threshold: Distance threshold to group nearby detections.
-    :return: Grouped lists of x, y coordinates and colors.
+    :return: Grouped lists of x, y coordinates, colors, and radii.
     """
     if len(x_coords) <= 1:
-        return x_coords, y_coords, colors  # Nothing to group if only 1 or no detections
-    
+        return x_coords, y_coords, colors, radii  # Nothing to group if only 1 or no detections
+
     # Initialize groups
-    grouped_x, grouped_y, grouped_colors = [], [], []
-    
+    grouped_x, grouped_y, grouped_colors, grouped_radii = [], [], [], []
+
     # Create a list of detections as (x, y) tuples
     points = np.array(list(zip(x_coords, y_coords)))
-    
+    point_radii = np.array(radii)
+    point_colors = np.array(colors)
+
     # Use a list to track whether a detection has been grouped
     grouped = [False] * len(points)
-    
+
     for i, point in enumerate(points):
-        if grouped[i]:  # Skip if already grouped
+        if grouped[i]:
             continue
-        
-        # Start a new group
         current_group = [i]
-        
         for j, other_point in enumerate(points):
             if i != j and not grouped[j]:
                 dist = distance.euclidean(point, other_point)
                 if dist < threshold:
                     current_group.append(j)
-        
-        # Calculate the average position and color of the group
+        # Calculate the average position, color, and radius of the group
         avg_x = int(np.mean([x_coords[idx] for idx in current_group]))
         avg_y = int(np.mean([y_coords[idx] for idx in current_group]))
-        group_color = colors[current_group[0]]  # Assuming all lights in a group have the same color
-        
+        group_color = colors[current_group[0]]  # Assuming same color
+        avg_radius = np.mean([radii[idx] for idx in current_group])
+
         # Add the grouped detection to the final list
         grouped_x.append(avg_x)
         grouped_y.append(avg_y)
         grouped_colors.append(group_color)
-        
+        grouped_radii.append(avg_radius)
+
         # Mark all members of the group as grouped
         for idx in current_group:
             grouped[idx] = True
-    
-    return grouped_x, grouped_y, grouped_colors
+
+    return grouped_x, grouped_y, grouped_colors, grouped_radii
 
 
 # Helper function for visualization (for debugging purposes)
@@ -257,20 +249,17 @@ def find_tfl_lights(c_image_path: str, **kwargs) -> Dict[str, Any]:
     gray = cv2.cvtColor(normalized_image, cv2.COLOR_BGR2GRAY)
 
     # Find light contours using the color mask and grayscale image
-    x_coords, y_coords, colors = find_light_contours(image, mask_combined, gray)
+    x_coords, y_coords, colors, radii = find_light_contours(image, mask_combined, gray)
 
-    # Group detections that are too close together
-    grouped_x, grouped_y, grouped_colors = group_close_detections(x_coords, y_coords, colors, threshold=30)
+    # In your find_tfl_lights function
+    grouped_x, grouped_y, grouped_colors, grouped_radii = group_close_detections(x_coords, y_coords, colors, radii, threshold=30)
 
-    # Visualization for debugging (optional)
-    if kwargs.get('debug', False):
-        visualize_detections(image, grouped_x, grouped_y, grouped_colors)
-
-    # Return the grouped coordinates and the color (red, green, etc.)
+    # Return the grouped coordinates, colors, and radii
     return {
         'x': grouped_x,
         'y': grouped_y,
         'col': grouped_colors,
+        'radius': grouped_radii,
     }
 
 
@@ -293,7 +282,7 @@ def test_find_tfl_lights(row: Series, args: Namespace) -> DataFrame:
     else:
         ax = None
 
-    # Call your find_tfl_lights function
+    ## Call your find_tfl_lights function
     attention_dict: Dict[str, Any] = find_tfl_lights(image_path, some_threshold=42, debug=args.debug)
     attention: DataFrame = pd.DataFrame(attention_dict)
 
@@ -405,6 +394,7 @@ def load_ground_truth(meta_table):
             ground_truths[row[IMAG_PATH]] = gt_data['objects']
     return ground_truths
 
+
 def parse_arguments(argv: Optional[Sequence[str]]):
     """
     Here are all the arguments in the attention stage.
@@ -423,61 +413,23 @@ def parse_arguments(argv: Optional[Sequence[str]]):
     return args
 
 
-def calculate_bbox_size(polygon: np.ndarray) -> int:
+def determine_zoom_factor(radius: float, base_radius: float = 10.0) -> float:
     """
-    Given a polygon (bounding box), calculate the width, height, and area of the box.
-    :param polygon: List of coordinates of the bounding box
-    :return: Area (width * height) of the bounding box in pixels
+    Determines zoom factor based on the radius of the detected circle.
+    Reverses the zoom logic so that larger circles are zoomed in more, 
+    and smaller circles are zoomed in less.
+    :param radius: Detected radius of the traffic light.
+    :param base_radius: The standard radius size you want in your crops.
+    :return: Calculated zoom factor.
     """
-    x_min = np.min(polygon[:, 0])
-    x_max = np.max(polygon[:, 0])
-    y_min = np.min(polygon[:, 1])
-    y_max = np.max(polygon[:, 1])
+    if radius <= 0 or np.isnan(radius):
+        return 1.0  # Default zoom factor to 1.0 if the radius is invalid
     
-    width = x_max - x_min
-    height = y_max - y_min
-    area = width * height
-    
-    return width, height, area
-
-def find_min_max_traffic_light_size(ground_truths: Dict[str, List[Dict[str, any]]]) -> Dict[str, float]:
-    """
-    Find the minimum and maximum sizes of traffic lights in the dataset using ground truth data.
-    :param ground_truths: Dictionary with image paths as keys and ground truth annotations as values
-    :return: Dictionary with min and max size (area), and typical width and height
-    """
-    min_size = float('inf')
-    max_size = float('-inf')
-    sizes = []
-
-    for image_path, objects in ground_truths.items():
-        for obj in objects:
-            if obj['label'] == 'traffic light':
-                polygon = np.array(obj['polygon'])
-                width, height, area = calculate_bbox_size(polygon)
-                sizes.append(area)
-                min_size = min(min_size, area)
-                max_size = max(max_size, area)
-    
-    avg_width = np.mean([calculate_bbox_size(np.array(obj['polygon']))[0] for obj_list in ground_truths.values() for obj in obj_list if obj['label'] == 'traffic light'])
-    avg_height = np.mean([calculate_bbox_size(np.array(obj['polygon']))[1] for obj_list in ground_truths.values() for obj in obj_list if obj['label'] == 'traffic light'])
-    
-    return {
-        'min_size': min_size,
-        'max_size': max_size,
-        'avg_width': avg_width,
-        'avg_height': avg_height
-    }
-
-
-def determine_zoom_factor(size: float, typical_size: float) -> float:
-    """
-    Calculate the zoom factor based on the size of the traffic light and the typical size.
-    :param size: Area of the detected traffic light bounding box
-    :param typical_size: Average or typical traffic light size in the dataset
-    :return: Suggested zoom factor
-    """
-    return typical_size / size
+    # Reverse the logic: Zoom more for larger circles
+    zoom_factor = BASE_RADIUS / radius
+    # Limit the zoom factor to prevent extreme zooms (optional)
+    zoom_factor = min(max(0.5, zoom_factor), 2.0)
+    return zoom_factor
 
 
 def main(argv=None):
@@ -502,21 +454,12 @@ def main(argv=None):
     all_results: DataFrame = run_on_list(meta_table, test_find_tfl_lights, args)
     combined_df: DataFrame = pd.concat([pd.DataFrame(columns=CSV_OUTPUT), all_results], ignore_index=True)
 
+    # Calculate zoom factors based on detected radii and the base radius
+    combined_df['zoom_factor'] = combined_df['radius'].apply(determine_zoom_factor)
+
     # Load ground truth data for each image
     ground_truths = load_ground_truth(meta_table)
 
-    # Find the minimum, maximum, and average sizes of traffic lights in the dataset
-    size_stats = find_min_max_traffic_light_size(ground_truths)
-
-    # For each image, determine the zoom factor based on the traffic light size
-    for image_path, objects in ground_truths.items():
-        for obj in objects:
-            if obj['label'] == 'traffic light':
-                polygon = np.array(obj['polygon'])
-                _, _, area = calculate_bbox_size(polygon)
-                zoom_factor = determine_zoom_factor(area, size_stats['avg_width'] * size_stats['avg_height'])
-                print(f"Zoom factor for {image_path}: {zoom_factor}")
-                
     # make crops out of the coordinates from the DataFrame
     crops_df: DataFrame = create_crops(combined_df, ground_truths)
 
