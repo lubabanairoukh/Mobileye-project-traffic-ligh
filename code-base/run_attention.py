@@ -1,6 +1,5 @@
 import json
 import argparse
-import math
 from datetime import datetime
 from argparse import Namespace
 from pathlib import Path
@@ -25,36 +24,21 @@ import scipy.ndimage as ndimage
 from scipy.ndimage import maximum_filter
 from PIL import Image
 import matplotlib.pyplot as plt
-from matplotlib import colors
 
 # Additional imports
 import cv2
-import imutils
+from scipy.spatial import distance
 
 
-def visualize_detections(image: np.ndarray, x_coords: List[int], y_coords: List[int], cutoff_y: int):
-    """
-    Visualizes the detected traffic lights by drawing circles at the detected coordinates.
-    :param image: Original image.
-    :param x_coords: List of x coordinates of detected lights.
-    :param y_coords: List of y coordinates of detected lights.
-    :param cutoff_y: y-coordinate of the cutoff line.
-    """
-    # Draw circles at detected points
-    for (x, y) in zip(x_coords, y_coords):
-        cv2.circle(image, (x, y), 20, (255, 0, 0), 2)  # Blue circle
-        cv2.circle(image, (x, y), 2, (0, 0, 255), -1)  # Red center point
-    
-    # Show the image with detections
-    cv2.imshow('Detected Traffic Lights', image)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+import cv2
+import numpy as np
+from typing import List, Dict, Tuple
 
 
 def apply_clahe(image: np.ndarray) -> np.ndarray:
     """
     Applies CLAHE (Contrast Limited Adaptive Histogram Equalization) to normalize the brightness.
-    :param image: Input grayscale image.
+    :param image: Input image.
     :return: Image after CLAHE has been applied.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -63,6 +47,28 @@ def apply_clahe(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(normalized_gray, cv2.COLOR_GRAY2BGR)
 
 
+def apply_gaussian_blur(image: np.ndarray) -> np.ndarray:
+    """
+    Apply Gaussian blur to the image to reduce noise.
+    :param image: Input image.
+    :return: Blurred image.
+    """
+    return cv2.GaussianBlur(image, (5, 5), 0)
+
+
+def apply_sobel_edge_detection(gray_image: np.ndarray) -> np.ndarray:
+    """
+    Apply Sobel edge detection to the grayscale image.
+    :param gray_image: Grayscale image.
+    :return: Edge-detected image.
+    """
+    grad_x = cv2.Sobel(gray_image, cv2.CV_64F, 1, 0, ksize=3)  # Horizontal edges
+    grad_y = cv2.Sobel(gray_image, cv2.CV_64F, 0, 1, ksize=3)  # Vertical edges
+    grad = cv2.magnitude(grad_x, grad_y)  # Combine the gradients
+    return cv2.convertScaleAbs(grad)
+
+
+# Create color masks for white, blue, and green light detection
 def create_color_masks(hsv_image: np.ndarray) -> np.ndarray:
     """
     Creates binary masks for detecting specific colors (white, blue, and green) in the HSV image.
@@ -73,36 +79,24 @@ def create_color_masks(hsv_image: np.ndarray) -> np.ndarray:
     lower_white = np.array([0, 0, 200])
     upper_white = np.array([180, 30, 255])
     mask_white = cv2.inRange(hsv_image, lower_white, upper_white)
-    
+
     # Blue surround detection
     lower_blue = np.array([100, 50, 50])
     upper_blue = np.array([130, 255, 255])
     mask_blue = cv2.inRange(hsv_image, lower_blue, upper_blue)
-    
-    # Adjusted Green light detection
-    lower_green = np.array([30, 50, 50])  # Adjusted to better detect green lights
+
+    # Green light detection
+    lower_green = np.array([30, 50, 50])
     upper_green = np.array([90, 255, 255])
     mask_green = cv2.inRange(hsv_image, lower_green, upper_green)
-    
+
     # Combine the white, blue, and green masks
     mask_combined = cv2.bitwise_or(cv2.bitwise_or(mask_white, mask_blue), mask_green)
     
     return mask_combined
 
 
-def apply_morphological_operations(mask: np.ndarray) -> np.ndarray:
-    """
-    Applies morphological operations (closing) to the mask to connect nearby regions.
-    :param mask: Binary mask.
-    :return: Morphologically transformed mask.
-    """
-    # Use morphological closing to connect regions
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    mask_morphed = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-    
-    return mask_morphed
-
-
+# Check if the region of interest is dark
 def is_dark_area(roi: np.ndarray, threshold: int = 50) -> bool:
     """
     Check if the region of interest (ROI) is dark based on pixel intensity.
@@ -113,105 +107,172 @@ def is_dark_area(roi: np.ndarray, threshold: int = 50) -> bool:
     return np.mean(roi) < threshold
 
 
-def find_light_contours(mask: np.ndarray, gray_image: np.ndarray, min_brightness: int = 100) -> Tuple[List[int], List[int], List[str]]:
+def is_circular(contour: np.ndarray, tolerance: float = 0.5) -> bool:
     """
-    Finds contours of possible traffic lights, filters them based on size and shape,
-    and checks if there's a dark area above or below the detected light.
+    Checks if a given contour is approximately circular.
+    :param contour: Contour points.
+    :param tolerance: Allowable tolerance for deviations from a perfect circle (default: 0.2).
+    :return: True if the contour is circular, False otherwise.
+    """
+    perimeter = cv2.arcLength(contour, True)
+    area = cv2.contourArea(contour)
+    if perimeter == 0:
+        return False  # Avoid division by zero
+    circularity = (4 * np.pi * area) / (perimeter ** 2)
+    return 1 - tolerance <= circularity <= 1 + tolerance
+
+
+def find_light_contours(image: np.ndarray, mask: np.ndarray, gray_image: np.ndarray, min_brightness: int = 100) -> Tuple[List[int], List[int], List[str]]:
+    """
+    Finds contours of possible traffic lights using both color detection and circularity check.
+    :param image: Input image.
     :param mask: Binary mask for detecting lights.
-    :param gray_image: Grayscale image to analyze halos and dark areas.
+    :param gray_image: Grayscale image for brightness and darkness checks.
     :param min_brightness: Minimum brightness threshold for detecting lights.
     :return: Lists of x and y coordinates of detected lights and their associated colors.
     """
+    # Find contours from the mask (color-based detection)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
+
+    # Prepare to store coordinates and colors of detected lights
     x_coords, y_coords, colors = [], [], []
-    
+
     for contour in contours:
-        # Filter based on area
         area = cv2.contourArea(contour)
-        if 100 < area < 2000:
+        if 100 < area < 2000 and is_circular(contour, tolerance=0.3):  # Filter by size and circularity
             x, y, w, h = cv2.boundingRect(contour)
             aspect_ratio = w / h
-            if 0.8 < aspect_ratio < 1.2:
+            if 0.8 < aspect_ratio < 1.2:  # Further filter for square-shaped bounding boxes (near circular)
                 # Check brightness in grayscale
-                roi = gray_image[max(0, y-10):min(gray_image.shape[0], y+h+10), max(0, x-10):min(gray_image.shape[1], x+w+10)]
+                roi = gray_image[max(0, y - 10):min(gray_image.shape[0], y + h + 10),
+                                 max(0, x - 10):min(gray_image.shape[1], x + w + 10)]
                 brightness = np.mean(roi)
                 if brightness > min_brightness:
                     # Check for dark area below (for green) or above (for red)
-                    below_roi = gray_image[y+h:min(gray_image.shape[0], y+2*h), x:x+w]  # Below detected light
-                    above_roi = gray_image[max(0, y-h):y, x:x+w]  # Above detected light
-                    
-                    if is_dark_area(below_roi):  # Light with dark area below (likely green)
+                    below_roi = gray_image[y + h:min(gray_image.shape[0], y + 2 * h), x:x + w]
+                    above_roi = gray_image[max(0, y - h):y, x:x + w]
+
+                    if is_dark_area(below_roi):
                         x_coords.append(x + w // 2)
                         y_coords.append(y + h // 2)
                         colors.append('green')
-                    elif is_dark_area(above_roi):  # Light with dark area above (likely red)
+                    elif is_dark_area(above_roi):
                         x_coords.append(x + w // 2)
                         y_coords.append(y + h // 2)
                         colors.append('red')
-    
+
     return x_coords, y_coords, colors
 
 
-def load_and_preprocess_image(image_path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def group_close_detections(x_coords: List[int], y_coords: List[int], colors: List[str], threshold: int = 30) -> Tuple[List[int], List[int], List[str]]:
     """
-    Loads the image, crops it, and converts it to grayscale and HSV color spaces.
-    :param image_path: Path to the image file.
-    :return: Cropped image, grayscale image, and HSV image.
+    Groups detections that are too close together based on a distance threshold.
+    :param x_coords: List of x coordinates of detected lights.
+    :param y_coords: List of y coordinates of detected lights.
+    :param colors: List of detected light colors ('red', 'green').
+    :param threshold: Distance threshold to group nearby detections.
+    :return: Grouped lists of x, y coordinates and colors.
     """
-    # Load the image
-    image = cv2.imread(image_path)
+    if len(x_coords) <= 1:
+        return x_coords, y_coords, colors  # Nothing to group if only 1 or no detections
     
-    # Get image dimensions and crop the bottom 60%
-    height, _ = image.shape[:2]
-    cutoff_y = int(height * 0.4)
-    image = image[:cutoff_y, :]
+    # Initialize groups
+    grouped_x, grouped_y, grouped_colors = [], [], []
     
-    # Convert to grayscale and HSV
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    # Create a list of detections as (x, y) tuples
+    points = np.array(list(zip(x_coords, y_coords)))
     
-    return image, gray, hsv
+    # Use a list to track whether a detection has been grouped
+    grouped = [False] * len(points)
+    
+    for i, point in enumerate(points):
+        if grouped[i]:  # Skip if already grouped
+            continue
+        
+        # Start a new group
+        current_group = [i]
+        
+        for j, other_point in enumerate(points):
+            if i != j and not grouped[j]:
+                dist = distance.euclidean(point, other_point)
+                if dist < threshold:
+                    current_group.append(j)
+        
+        # Calculate the average position and color of the group
+        avg_x = int(np.mean([x_coords[idx] for idx in current_group]))
+        avg_y = int(np.mean([y_coords[idx] for idx in current_group]))
+        group_color = colors[current_group[0]]  # Assuming all lights in a group have the same color
+        
+        # Add the grouped detection to the final list
+        grouped_x.append(avg_x)
+        grouped_y.append(avg_y)
+        grouped_colors.append(group_color)
+        
+        # Mark all members of the group as grouped
+        for idx in current_group:
+            grouped[idx] = True
+    
+    return grouped_x, grouped_y, grouped_colors
+
+
+# Helper function for visualization (for debugging purposes)
+def visualize_detections(image: np.ndarray, x_coords: List[int], y_coords: List[int], colors: List[str]):
+    """
+    Visualizes the detected traffic lights by drawing circles at the detected coordinates.
+    :param image: Original image.
+    :param x_coords: List of x coordinates of detected lights.
+    :param y_coords: List of y coordinates of detected lights.
+    :param colors: List of colors corresponding to detected lights ('red', 'green').
+    """
+    for (x, y, color) in zip(x_coords, y_coords, colors):
+        if color == 'red':
+            cv2.circle(image, (x, y), 20, (0, 0, 255), 2)  # Red circle
+        elif color == 'green':
+            cv2.circle(image, (x, y), 20, (0, 255, 0), 2)  # Green circle
+
+    # Display the image with detections
+    cv2.imshow('Detected Traffic Lights', image)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
 
 
 def find_tfl_lights(c_image_path: str, **kwargs) -> Dict[str, Any]:
     """
-    Main function that detects traffic lights by combining image processing techniques
-    such as color masking, morphological operations, and contour detection.
+    Main function that detects traffic lights by combining color and edge detection techniques.
     :param c_image_path: Path to the image file.
     :param kwargs: Additional arguments (e.g., for debugging).
     :return: Dictionary with keys 'x', 'y', 'col' containing lists for detected light coordinates and colors.
     """
     # Load the image
     image = cv2.imread(c_image_path)
-    
+
     # Apply CLAHE for brightness normalization
     normalized_image = apply_clahe(image)
-    
-    # Convert to HSV color space
+
+    # Use color detection
     hsv = cv2.cvtColor(normalized_image, cv2.COLOR_BGR2HSV)
-    
-    # Create color masks for white, blue, and green regions (traffic light candidates)
     mask_combined = create_color_masks(hsv)
-    
+
     # Convert the normalized image to grayscale
     gray = cv2.cvtColor(normalized_image, cv2.COLOR_BGR2GRAY)
-    
-    # Find contours and filter them to detect traffic lights
-    x_coords, y_coords, colors = find_light_contours(mask_combined, gray, min_brightness=80)  # Reduced brightness threshold
-    
+
+    # Find light contours using the color mask and grayscale image
+    x_coords, y_coords, colors = find_light_contours(image, mask_combined, gray)
+
+    # Group detections that are too close together
+    grouped_x, grouped_y, grouped_colors = group_close_detections(x_coords, y_coords, colors, threshold=30)
+
     # Visualization for debugging (optional)
     if kwargs.get('debug', False):
-        height, width = image.shape[:2]
-        cutoff_y = int(height * 0.4)
-        visualize_detections(image, x_coords, y_coords, cutoff_y)
-    
-    # Return the coordinates and the color (blue and green)
+        visualize_detections(image, grouped_x, grouped_y, grouped_colors)
+
+    # Return the grouped coordinates and the color (red, green, etc.)
     return {
-        'x': x_coords,
-        'y': y_coords,
-        'col': colors,
+        'x': grouped_x,
+        'y': grouped_y,
+        'col': grouped_colors,
     }
+
 
 def test_find_tfl_lights(row: Series, args: Namespace) -> DataFrame:
     """
@@ -313,7 +374,7 @@ def run_on_list(meta_table: pd.DataFrame, func: callable, args: Namespace) -> pd
     return all_results
 
 
-def save_df_for_part_2(crops_df: DataFrame, results_df: DataFrame):
+def save_df_to_csv(crops_df: DataFrame, results_df: DataFrame):
     if not ATTENTION_PATH.exists():
         ATTENTION_PATH.mkdir()
 
@@ -408,6 +469,7 @@ def find_min_max_traffic_light_size(ground_truths: Dict[str, List[Dict[str, any]
         'avg_height': avg_height
     }
 
+
 def determine_zoom_factor(size: float, typical_size: float) -> float:
     """
     Calculate the zoom factor based on the size of the traffic light and the typical size.
@@ -416,6 +478,7 @@ def determine_zoom_factor(size: float, typical_size: float) -> float:
     :return: Suggested zoom factor
     """
     return typical_size / size
+
 
 def main(argv=None):
     """
@@ -455,10 +518,10 @@ def main(argv=None):
                 print(f"Zoom factor for {image_path}: {zoom_factor}")
                 
     # make crops out of the coordinates from the DataFrame
-    #crops_df: DataFrame = create_crops(combined_df, ground_truths)
+    crops_df: DataFrame = create_crops(combined_df, ground_truths)
 
     # save the DataFrames in the right format for stage two.
-    #save_df_for_part_2(crops_df, combined_df)
+    save_df_to_csv(crops_df, combined_df)
     print(f"Got a total of {len(combined_df)} results")
 
     if args.debug:
