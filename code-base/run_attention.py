@@ -26,9 +26,9 @@ from PIL import Image
 import matplotlib.pyplot as plt
 
 # Additional imports
-import cv2
 from scipy.spatial import distance
 
+from concurrent.futures import ProcessPoolExecutor
 
 import cv2
 import numpy as np
@@ -53,7 +53,13 @@ def apply_gaussian_blur(image: np.ndarray) -> np.ndarray:
     :param image: Input image.
     :return: Blurred image.
     """
-    return cv2.GaussianBlur(image, (5, 5), 0)
+    res = cv2.GaussianBlur(image, (5, 5), 0)
+    cv2.imshow("Green Mask", res)
+    # Wait for key press to proceed
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+    return 
 
 
 def apply_sobel_edge_detection(gray_image: np.ndarray) -> np.ndarray:
@@ -65,15 +71,15 @@ def apply_sobel_edge_detection(gray_image: np.ndarray) -> np.ndarray:
     grad_x = cv2.Sobel(gray_image, cv2.CV_64F, 1, 0, ksize=3)  # Horizontal edges
     grad_y = cv2.Sobel(gray_image, cv2.CV_64F, 0, 1, ksize=3)  # Vertical edges
     grad = cv2.magnitude(grad_x, grad_y)  # Combine the gradients
+
     return cv2.convertScaleAbs(grad)
 
 
-# Create color masks for white, blue, and green light detection
 def create_color_masks(hsv_image: np.ndarray) -> np.ndarray:
     """
-    Creates binary masks for detecting specific colors (white, blue, and green) in the HSV image.
+    Creates binary masks for detecting specific colors (white, blue, green, and red) in the HSV image.
     :param hsv_image: HSV image.
-    :return: Combined binary mask for white, blue, and green regions.
+    :return: Combined binary mask for white, blue, green, and red regions.
     """
     # White center detection
     lower_white = np.array([0, 0, 200])
@@ -90,9 +96,21 @@ def create_color_masks(hsv_image: np.ndarray) -> np.ndarray:
     upper_green = np.array([90, 255, 255])
     mask_green = cv2.inRange(hsv_image, lower_green, upper_green)
 
-    # Combine the white, blue, and green masks
+    # Red light detection (two ranges due to hue wrapping)
+    lower_red1 = np.array([0, 50, 50])
+    upper_red1 = np.array([10, 255, 255])
+    mask_red1 = cv2.inRange(hsv_image, lower_red1, upper_red1)
+
+    lower_red2 = np.array([170, 50, 50])
+    upper_red2 = np.array([180, 255, 255])
+    mask_red2 = cv2.inRange(hsv_image, lower_red2, upper_red2)
+
+    mask_red = cv2.bitwise_or(mask_red1, mask_red2)
+
+    # Combine the white, blue, green, and red masks
     mask_combined = cv2.bitwise_or(cv2.bitwise_or(mask_white, mask_blue), mask_green)
-    
+    mask_combined = cv2.bitwise_or(mask_combined, mask_red)
+
     return mask_combined
 
 
@@ -139,7 +157,7 @@ def find_light_contours(image: np.ndarray, mask: np.ndarray, gray_image: np.ndar
 
     for contour in contours:
         area = cv2.contourArea(contour)
-        if 100 < area < 2000 and is_circular(contour, tolerance=0.3):
+        if 100 < area < 2000 and is_circular(contour, tolerance=0.2):
             # Get bounding rectangle
             x, y, w, h = cv2.boundingRect(contour)
             aspect_ratio = w / h
@@ -155,28 +173,16 @@ def find_light_contours(image: np.ndarray, mask: np.ndarray, gray_image: np.ndar
     return x_coords, y_coords, colors, radii
 
 
-def group_close_detections(x_coords: List[int], y_coords: List[int], colors: List[str], radii: List[float], threshold: int = 30) -> Tuple[List[int], List[int], List[str], List[float]]:
+def group_close_detections(x_coords: List[int], y_coords: List[int], colors: List[str], radii: List[float], threshold: int = 20) -> Tuple[List[int], List[int], List[str], List[float]]:
     """
     Groups detections that are too close together based on a distance threshold.
-    :param x_coords: List of x coordinates of detected lights.
-    :param y_coords: List of y coordinates of detected lights.
-    :param colors: List of detected light colors ('red', 'green').
-    :param radii: List of radii of detected lights.
-    :param threshold: Distance threshold to group nearby detections.
-    :return: Grouped lists of x, y coordinates, colors, and radii.
+    The threshold can be made more strict to avoid creating multiple crops of the same light.
     """
     if len(x_coords) <= 1:
         return x_coords, y_coords, colors, radii  # Nothing to group if only 1 or no detections
 
-    # Initialize groups
     grouped_x, grouped_y, grouped_colors, grouped_radii = [], [], [], []
-
-    # Create a list of detections as (x, y) tuples
     points = np.array(list(zip(x_coords, y_coords)))
-    point_radii = np.array(radii)
-    point_colors = np.array(colors)
-
-    # Use a list to track whether a detection has been grouped
     grouped = [False] * len(points)
 
     for i, point in enumerate(points):
@@ -188,7 +194,8 @@ def group_close_detections(x_coords: List[int], y_coords: List[int], colors: Lis
                 dist = distance.euclidean(point, other_point)
                 if dist < threshold:
                     current_group.append(j)
-        # Calculate the average position, color, and radius of the group
+
+        # Calculate the average position and radius for the group
         avg_x = int(np.mean([x_coords[idx] for idx in current_group]))
         avg_y = int(np.mean([y_coords[idx] for idx in current_group]))
         group_color = colors[current_group[0]]  # Assuming same color
@@ -306,21 +313,30 @@ def test_find_tfl_lights(row: Series, args: Namespace) -> DataFrame:
     print(f"Image: {image_path}, {is_red.sum()} reds, {is_green.sum()} greens, {(~is_red & ~is_green).sum()} others")
 
     if args.debug:
-        # Plotting detections
+        # Enhanced Debug Visualization
         plt.figure(f"{row[SEQ_IMAG]}: {row[NAME]} detections")
         plt.clf()
+
+        # Plot 1: Original image with traffic light detections
         plt.subplot(211, sharex=ax, sharey=ax)
         plt.imshow(image)
-        plt.title('Original image.. Always try to compare your output to it')
-        plt.plot(tfl_x[is_red], tfl_y[is_red], 'rx', markersize=4)
-        plt.plot(tfl_x[is_green], tfl_y[is_green], 'g+', markersize=4)
-        plt.plot(tfl_x[~is_red & ~is_green], tfl_y[~is_red & ~is_green], 'bo', markersize=4)  # Plot other colors
-        # Display the thresholded image (optional)
+        plt.title('Original image.. Compare with detections below')
+        plt.plot(tfl_x[is_red], tfl_y[is_red], 'rx', markersize=6, label='Red lights')
+        plt.plot(tfl_x[is_green], tfl_y[is_green], 'g+', markersize=6, label='Green lights')
+        plt.plot(tfl_x[~is_red & ~is_green], tfl_y[~is_red & ~is_green], 'bo', markersize=6, label='Other lights')
+
+        plt.legend(loc='upper left')
+
+        # Plot 2: Image with colored circles on detections
         plt.subplot(212, sharex=ax, sharey=ax)
         plt.imshow(cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB))
-        plt.title('Image with Detections')
-        plt.suptitle("When you zoom on one, the other zooms too :-)")
+        plt.title('Image with detected traffic lights')
+        
+        plt.tight_layout()  # Better layout
 
+        # Show the images without blocking the flow of execution
+        plt.show(block=True)
+        
     return attention
 
 def prepare_list(in_csv_file: Path, args: Namespace) -> DataFrame:
@@ -344,17 +360,25 @@ def prepare_list(in_csv_file: Path, args: Namespace) -> DataFrame:
 
 def run_on_list(meta_table: pd.DataFrame, func: callable, args: Namespace) -> pd.DataFrame:
     """
-    Take a function, and run it on a list. Return accumulated results.
-
-    :param meta_table: A DF with the columns your function requires
-    :param func: A function to take a row of the DF, and return a DF with some results
-    :param args:
+    Take a function and run it on a list. Return accumulated results.
+    Parallelize the function calls for performance.
     """
     acc: List[DataFrame] = []
     time_0: datetime = datetime.now()
-    for _, row in tqdm.tqdm(meta_table.iterrows()):
-        res: DataFrame = func(row, args)
-        acc.append(res)
+
+    # Use ProcessPoolExecutor to parallelize the work
+    with ProcessPoolExecutor() as executor:
+        # Map each row of the meta_table to the function
+        futures = [executor.submit(func, row, args) for _, row in meta_table.iterrows()]
+
+        # Collect the results as they complete
+        for future in tqdm.tqdm(futures):
+            try:
+                res: DataFrame = future.result()
+                acc.append(res)
+            except Exception as e:
+                print(f"Error processing row: {e}")
+
     time_1: datetime = datetime.now()
     all_results: DataFrame = pd.concat(acc).reset_index(drop=True)
     print(f"Took me {(time_1 - time_0).total_seconds()} seconds for "
@@ -425,10 +449,9 @@ def determine_zoom_factor(radius: float, base_radius: float = 10.0) -> float:
     if radius <= 0 or np.isnan(radius):
         return 1.0  # Default zoom factor to 1.0 if the radius is invalid
     
-    # Reverse the logic: Zoom more for larger circles
     zoom_factor = BASE_RADIUS / radius
     # Limit the zoom factor to prevent extreme zooms (optional)
-    zoom_factor = min(max(0.5, zoom_factor), 2.0)
+    #zoom_factor = min(max(0.5, zoom_factor), 2.0)
     return zoom_factor
 
 

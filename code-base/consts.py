@@ -52,12 +52,12 @@ ATTENTION_PATH: Path = DATA_DIR / 'attention_results'
 ATTENTION_CSV_NAME: str = 'attention_results.csv'
 CROP_CSV_NAME: str = 'crop_results.csv'
 
-
 # File names (directories to be appended automatically)
 TFLS_CSV: str = 'tfls.csv'
 CSV_OUTPUT_NAME: str = 'results.csv'
   
-CROP_WIDTH: int = 40
-CROP_HEIGHT: int = 60
+CROP_WIDTH: int = 80
+CROP_HEIGHT: int = 240
 
 RADIUS = 'radius'
+BASE_RADIUS = 10

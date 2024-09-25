@@ -13,21 +13,32 @@ from scipy import ndimage
 
 def make_crop(image: np.ndarray, x: float, y: float, crop_width: int = 40, crop_height: int = 60) -> Tuple[int, int, int, int, np.ndarray]:
     """
-    Creates a crop from the image based on center coordinates and crop dimensions.
+    Creates a crop from the image based on center coordinates and crop dimensions, 
+    and handles cases where the crop goes out of image bounds.
     """
     x = int(round(x))
     y = int(round(y))
-    
+
     half_width = crop_width // 2
     half_height = crop_height // 2
-    
+
+    # Ensure the crop stays within the image bounds, adjusting if necessary
     x0 = max(x - half_width, 0)
     x1 = min(x + half_width, image.shape[1])
     y0 = max(y - half_height, 0)
     y1 = min(y + half_height, image.shape[0])
-    
+
+    # Check if the crop goes out of bounds and add padding if necessary
     crop = image[y0:y1, x0:x1]
+
+    # If the crop is smaller than expected (due to out-of-bounds), pad the image with black pixels
+    if crop.shape[0] < crop_height or crop.shape[1] < crop_width:
+        padded_crop = np.zeros((crop_height, crop_width, 3), dtype=np.uint8)
+        padded_crop[:crop.shape[0], :crop.shape[1]] = crop  # Place the actual crop inside the padded image
+        crop = padded_crop
+
     return x0, x1, y0, y1, crop
+
 
 def check_crop(ground_truth: List[Dict[str, Any]], x0: int, x1: int, y0: int, y1: int) -> Tuple[bool, bool]:
     """
@@ -45,7 +56,7 @@ def check_crop(ground_truth: List[Dict[str, Any]], x0: int, x1: int, y0: int, y1
             gt_box = [x_min, y_min, x_max, y_max]
             # Compute Intersection over Union (IoU)
             iou = compute_iou(crop_box, gt_box)
-            if iou > 0.2:
+            if iou > 0.15:
                 return True, False  # is_true=True, is_ignore=False
     return False, False  # is_true=False, is_ignore=False
     
@@ -113,14 +124,18 @@ def create_crops(df: DataFrame, ground_truths: Dict[str, List[Dict[str, Any]]], 
             if zoom_factor != 1.0:
                 print(zoom_factor, row[SEQ_IMAG])
                 # Zoom the image
-                image = ndimage.zoom(image, (zoom_factor, zoom_factor, 1), order=1)
+                image_zoomed = ndimage.zoom(image, (zoom_factor, zoom_factor, 1), order=1)
 
                 # Adjust coordinates due to zoom
                 x *= zoom_factor
                 y *= zoom_factor
 
+                # Ensure that after zoom, the coordinates are still within image bounds
+                x = min(max(x, 0), image_zoomed.shape[1])
+                y = min(max(y, 0), image_zoomed.shape[0])
+
                 # Create the crop again based on adjusted coordinates with zoom
-                x0, x1, y0, y1, crop = make_crop(image, x, y, crop_width=crop_width, crop_height=crop_height)
+                x0, x1, y0, y1, crop = make_crop(image_zoomed, x, y, crop_width=crop_width, crop_height=crop_height)
 
             # Save the crop image
             crop_filename = f"crop_{row[SEQ_IMAG]}_{index}.png"
