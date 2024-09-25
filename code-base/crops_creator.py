@@ -115,41 +115,40 @@ def create_crops(df: DataFrame, ground_truths: Dict[str, List[Dict[str, Any]]], 
         # Check if the crop contains a traffic light
         is_true, is_ignore = check_crop(gt_annotations, x0, x1, y0, y1)
         
-        # Save the crop if it's valid
-        if is_true:
-            # Get zoom factor for this detection
-            zoom_factor = row['zoom_factor']
+        # Get zoom factor for this detection
+        zoom_factor = row['zoom_factor']
 
-            # Apply zoom to the image if needed
-            if zoom_factor != 1.0:
-                print(zoom_factor, row[SEQ_IMAG])
-                # Zoom the image
-                image_zoomed = ndimage.zoom(image, (zoom_factor, zoom_factor, 1), order=1)
+        # Apply zoom to the image if needed
+        if zoom_factor != 1.0:
+            print(zoom_factor, row[SEQ_IMAG])
+            # Zoom the image
+            image_zoomed = ndimage.zoom(image, (zoom_factor, zoom_factor, 1), order=1)
 
-                # Adjust coordinates due to zoom
-                x *= zoom_factor
-                y *= zoom_factor
+            # Adjust coordinates due to zoom
+            x *= zoom_factor
+            y *= zoom_factor
 
-                # Ensure that after zoom, the coordinates are still within image bounds
-                x = min(max(x, 0), image_zoomed.shape[1])
-                y = min(max(y, 0), image_zoomed.shape[0])
+            # Ensure that after zoom, the coordinates are still within image bounds
+            x = min(max(x, 0), image_zoomed.shape[1])
+            y = min(max(y, 0), image_zoomed.shape[0])
 
-                # Create the crop again based on adjusted coordinates with zoom
-                x0, x1, y0, y1, crop = make_crop(image_zoomed, x, y, crop_width=crop_width, crop_height=crop_height)
+            # Create the crop again based on adjusted coordinates with zoom
+            x0, x1, y0, y1, crop = make_crop(image_zoomed, x, y, crop_width=crop_width, crop_height=crop_height)
 
-            # Save the crop image
-            crop_filename = f"crop_{row[SEQ_IMAG]}_{index}.png"
-            crop_path = CROP_DIR / crop_filename
-            Image.fromarray(crop).save(crop_path)
+        # Save the crop image
+        crop_filename = f"crop_{row[SEQ_IMAG]}_{index}.png"
+        crop_path = CROP_DIR / crop_filename
+        Image.fromarray(crop).save(crop_path)
 
-            # Update the result template
-            result_template[CROP_PATH] = crop_path.as_posix()
-            result_template[X0], result_template[X1] = x0, x1
-            result_template[Y0], result_template[Y1] = y0, y1
-            result_template[IS_TRUE] = is_true
-            result_template[IGNOR] = is_ignore
+        # Update the result template
+        result_template[CROP_PATH] = crop_path.as_posix()
+        result_template[X0], result_template[X1] = x0, x1
+        result_template[Y0], result_template[Y1] = y0, y1
+        result_template[IS_TRUE] = is_true
+        result_template[IGNOR] = is_ignore
 
-            # Append the result to the DataFrame
-            result_df = result_df._append(result_template, ignore_index=True)
+        # Append the result to the DataFrame
+        result_df = result_df._append(result_template, ignore_index=True)
+            
 
     return result_df
